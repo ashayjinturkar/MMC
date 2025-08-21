@@ -104,17 +104,50 @@ app.post('/api/test-upload', newsletterUpload.single('pdf'), (req, res) => {
 });
 
 // MongoDB connection
-const mongoURI = process.env.MONGO_URI || 'mongodb+srv://ashayjinturkar2:9pTfy35Fxqseef0M@cluster0.hkirdlo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
+const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
 
-// Connect to MongoDB with retry logic
+if (!mongoURI) {
+  console.error('MONGODB_URI environment variable is not set');
+  console.log('Server will continue running without database connection');
+  console.log('Database features will be limited until connection is established');
+}
+
+// Connect to MongoDB with retry logic and better SSL handling
 const connectDB = async () => {
   try {
-    await mongoose.connect(mongoURI);
+    if (!mongoURI) {
+      throw new Error('MongoDB URI not configured');
+    }
+    
+    const options = {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      ssl: true,
+      sslValidate: true,
+      retryWrites: true,
+      w: 'majority',
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+      family: 4, // Force IPv4
+      maxPoolSize: 10,
+      minPoolSize: 1,
+      maxIdleTimeMS: 30000,
+    };
+
+    await mongoose.connect(mongoURI, options);
     console.log('Connected to MongoDB successfully');
   } catch (error) {
     console.error('MongoDB connection error:', error);
     console.log('Server will continue running without database connection');
     console.log('Database features will be limited until connection is established');
+    
+    // Log specific SSL/TLS errors
+    if (error.code === 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR') {
+      console.error('SSL/TLS Error detected. This might be due to:');
+      console.error('1. Network/firewall issues');
+      console.error('2. MongoDB Atlas SSL certificate problems');
+      console.error('3. TLS version incompatibility');
+    }
   }
 };
 
@@ -854,5 +887,5 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`MongoDB URI: ${mongoURI.substring(0, 50)}...`);
+  console.log(`MongoDB URI: ${mongoURI ? mongoURI.substring(0, 50) + '...' : 'Not configured'}`);
 }); 
