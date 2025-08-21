@@ -1,15 +1,18 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { pool, initializeDatabase } = require('./database');
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Initialize database tables
+initializeDatabase();
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(__dirname, 'uploads');
@@ -85,177 +88,17 @@ app.get('/api/test', (req, res) => {
   res.json({ message: 'Backend is working!', timestamp: new Date().toISOString() });
 });
 
-// Test upload endpoint
-app.post('/api/test-upload', newsletterUpload.single('pdf'), (req, res) => {
-  console.log('Test upload received');
-  console.log('File:', req.file);
-  console.log('Body:', req.body);
-  
-  if (req.file) {
-    res.json({ 
-      message: 'Test upload successful', 
-      filename: req.file.filename,
-      originalName: req.file.originalname,
-      mimetype: req.file.mimetype
-    });
-  } else {
-    res.status(400).json({ error: 'No file received' });
-  }
-});
-
-// MongoDB connection
-const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI;
-
-if (!mongoURI) {
-  console.error('MONGODB_URI environment variable is not set');
-  console.log('Server will continue running without database connection');
-  console.log('Database features will be limited until connection is established');
-}
-
-// SSL/TLS configuration from environment variables
-const forceSSL = process.env.MONGODB_SSL !== 'false';
-const validateSSL = process.env.MONGODB_SSL_VALIDATE !== 'false';
-const useTLS = process.env.MONGODB_TLS === 'true';
-
-console.log('MongoDB SSL Configuration:', {
-  forceSSL,
-  validateSSL,
-  useTLS,
-  hasURI: !!mongoURI
-});
-
-// Connect to MongoDB with retry logic and better SSL handling
-const connectDB = async () => {
+// Database health check
+app.get('/api/db-health', async (req, res) => {
   try {
-    if (!mongoURI) {
-      throw new Error('MongoDB URI not configured');
-    }
-    
-    // Try multiple connection strategies
-    const connectionStrategies = [
-      // Strategy 1: Standard SSL with validation
-      {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        ssl: true,
-        retryWrites: true,
-        w: 'majority',
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        family: 4,
-        maxPoolSize: 10,
-        minPoolSize: 1,
-        maxIdleTimeMS: 30000,
-      },
-      // Strategy 2: TLS with validation
-      {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        tls: true,
-        tlsAllowInvalidCertificates: false,
-        retryWrites: true,
-        w: 'majority',
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        family: 4,
-        maxPoolSize: 10,
-        minPoolSize: 1,
-        maxIdleTimeMS: 30000,
-      },
-      // Strategy 3: Minimal SSL (fallback)
-      {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        ssl: true,
-        retryWrites: true,
-        w: 'majority',
-        serverSelectionTimeoutMS: 15000,
-        socketTimeoutMS: 60000,
-        family: 4,
-        maxPoolSize: 5,
-        minPoolSize: 1,
-        maxIdleTimeMS: 30000,
-      },
-      // Strategy 4: No SSL (emergency fallback)
-      {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        ssl: false,
-        retryWrites: true,
-        w: 'majority',
-        serverSelectionTimeoutMS: 20000,
-        socketTimeoutMS: 60000,
-        family: 4,
-        maxPoolSize: 3,
-        minPoolSize: 1,
-        maxIdleTimeMS: 30000,
-      }
-    ];
-
-    let connected = false;
-    let lastError = null;
-
-    for (let i = 0; i < connectionStrategies.length; i++) {
-      try {
-        console.log(`Trying MongoDB connection strategy ${i + 1}...`);
-        await mongoose.connect(mongoURI, connectionStrategies[i]);
-        console.log(`Connected to MongoDB successfully using strategy ${i + 1}`);
-        connected = true;
-        break;
-      } catch (strategyError) {
-        console.log(`Strategy ${i + 1} failed:`, strategyError.message);
-        lastError = strategyError;
-        
-        // If this is an SSL error, try the next strategy
-        if (strategyError.code === 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR' || 
-            strategyError.message.includes('SSL') ||
-            strategyError.message.includes('TLS')) {
-          console.log('SSL/TLS error detected, trying next strategy...');
-          continue;
-        }
-        
-        // For non-SSL errors, break and use the last error
-        break;
-      }
-    }
-
-    if (!connected) {
-      throw lastError || new Error('All connection strategies failed');
-    }
-
+    const client = await pool.connect();
+    await client.query('SELECT NOW()');
+    client.release();
+    res.json({ status: 'healthy', message: 'Database connection successful', timestamp: new Date().toISOString() });
   } catch (error) {
-    console.error('MongoDB connection error:', error);
-    console.log('Server will continue running without database connection');
-    console.log('Database features will be limited until connection is established');
-    
-    // Log specific SSL/TLS errors
-    if (error.code === 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR') {
-      console.error('SSL/TLS Error detected. This might be due to:');
-      console.error('1. Network/firewall issues');
-      console.error('2. MongoDB Atlas SSL certificate problems');
-      console.error('3. TLS version incompatibility');
-      console.error('4. Render network restrictions');
-    }
+    console.error('Database health check failed:', error);
+    res.status(500).json({ status: 'unhealthy', error: 'Database connection failed', details: error.message });
   }
-};
-
-// Initialize database connection
-connectDB();
-
-const db = mongoose.connection;
-db.on('error', (error) => {
-  console.error('MongoDB connection error:', error);
-});
-db.once('open', () => {
-  console.log('Connected to MongoDB');
-});
-
-// Reconnection logic
-db.on('disconnected', () => {
-  console.log('MongoDB disconnected. Attempting to reconnect...');
-  setTimeout(() => {
-    connectDB();
-  }, 5000);
 });
 
 // Blog Schema
@@ -301,11 +144,10 @@ const Testimonial = mongoose.model('Testimonial', testimonialSchema);
 // Blog CRUD Endpoints
 app.get('/api/blogs', async (req, res) => {
   try {
-    if (!mongoose.connection.readyState) {
-      return res.status(503).json({ error: 'Database not connected', details: 'Please try again later' });
-    }
-    const blogs = await Blog.find().sort({ createdAt: -1 });
-    res.json(blogs);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM blogs ORDER BY created_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching blogs:', error);
     res.status(500).json({ error: 'Failed to fetch blogs', details: error.message });
@@ -313,16 +155,27 @@ app.get('/api/blogs', async (req, res) => {
 });
 
 app.get('/api/blogs/featured', async (req, res) => {
-  const featuredBlogs = await Blog.find({ featured: true }).sort({ createdAt: -1 });
-  res.json(featuredBlogs);
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM blogs WHERE featured = true ORDER BY created_at DESC');
+    client.release();
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching featured blogs:', error);
+    res.status(500).json({ error: 'Failed to fetch featured blogs', details: error.message });
+  }
 });
 
 app.get('/api/blogs/:id', async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
-    if (blog) {
-      blog.views += 1;
-      await blog.save();
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM blogs WHERE id = $1', [req.params.id]);
+    client.release();
+    
+    if (result.rows.length > 0) {
+      const blog = result.rows[0];
+      // Update views
+      await pool.query('UPDATE blogs SET views = views + 1 WHERE id = $1', [req.params.id]);
       res.json(blog);
     } else {
       res.status(404).json({ error: 'Blog not found' });
@@ -355,21 +208,15 @@ app.post('/api/blogs', upload.single('image'), async (req, res) => {
       thumbnailPath = `/uploads/${req.file.filename}`; // Same image for both
     }
     
-    const blog = new Blog({ 
-      title, 
-      excerpt, 
-      image: imagePath, 
-      thumbnail: thumbnailPath, 
-      date, 
-      author, 
-      category, 
-      tags: tagsArray, 
-      content, 
-      featured: featured || false 
-    });
+    const client = await pool.connect();
+    const result = await client.query(`
+      INSERT INTO blogs (title, excerpt, image, thumbnail, date, author, category, tags, content, featured)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *
+    `, [title, excerpt, imagePath, thumbnailPath, date, author, category, tagsArray, content, featured || false]);
+    client.release();
     
-    await blog.save();
-    res.status(201).json(blog);
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating blog:', error);
     res.status(500).json({ error: 'Failed to create blog', details: error.message });
@@ -390,10 +237,15 @@ app.put('/api/blogs/:id', upload.single('image'), async (req, res) => {
     const tagsArray = typeof tags === 'string' ? tags.split(',').map(tag => tag.trim()).filter(tag => tag) : tags || [];
     
     // Get existing blog to check current image
-    const existingBlog = await Blog.findById(req.params.id);
-    if (!existingBlog) {
+    const client = await pool.connect();
+    const existingResult = await client.query('SELECT * FROM blogs WHERE id = $1', [req.params.id]);
+    
+    if (existingResult.rows.length === 0) {
+      client.release();
       return res.status(404).json({ error: 'Blog not found' });
     }
+    
+    const existingBlog = existingResult.rows[0];
     
     // Handle image upload
     let imagePath = existingBlog.image;
@@ -412,24 +264,15 @@ app.put('/api/blogs/:id', upload.single('image'), async (req, res) => {
       thumbnailPath = `/uploads/${req.file.filename}`; // Same image for both
     }
     
-    const blog = await Blog.findByIdAndUpdate(
-      req.params.id,
-      { 
-        title, 
-        excerpt, 
-        image: imagePath, 
-        thumbnail: thumbnailPath, 
-        date, 
-        author, 
-        category, 
-        tags: tagsArray, 
-        content, 
-        featured: featured || false 
-      },
-      { new: true }
-    );
+    const result = await client.query(`
+      UPDATE blogs 
+      SET title = $1, excerpt = $2, image = $3, thumbnail = $4, date = $5, author = $6, category = $7, tags = $8, content = $9, featured = $10
+      WHERE id = $11
+      RETURNING *
+    `, [title, excerpt, imagePath, thumbnailPath, date, author, category, tagsArray, content, featured || false, req.params.id]);
+    client.release();
     
-    res.json(blog);
+    res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating blog:', error);
     res.status(500).json({ error: 'Failed to update blog', details: error.message });
@@ -438,10 +281,15 @@ app.put('/api/blogs/:id', upload.single('image'), async (req, res) => {
 
 app.delete('/api/blogs/:id', async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
-    if (!blog) {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM blogs WHERE id = $1', [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      client.release();
       return res.status(404).json({ error: 'Blog not found' });
     }
+    
+    const blog = result.rows[0];
     
     // Delete associated images
     if (blog.image && blog.image.startsWith('/uploads/')) {
@@ -451,7 +299,9 @@ app.delete('/api/blogs/:id', async (req, res) => {
       }
     }
     
-    await Blog.findByIdAndDelete(req.params.id);
+    await client.query('DELETE FROM blogs WHERE id = $1', [req.params.id]);
+    client.release();
+    
     res.json({ message: 'Blog deleted' });
   } catch (error) {
     console.error('Error deleting blog:', error);
@@ -461,14 +311,20 @@ app.delete('/api/blogs/:id', async (req, res) => {
 
 // Analytics endpoint
 app.get('/api/blogs-analytics', async (req, res) => {
-  const totalPosts = await Blog.countDocuments();
-  const totalViews = await Blog.aggregate([
-    { $group: { _id: null, views: { $sum: '$views' } } },
-  ]);
-  res.json({
-    totalPosts,
-    totalViews: totalViews[0] ? totalViews[0].views : 0,
-  });
+  try {
+    const client = await pool.connect();
+    const totalPostsResult = await client.query('SELECT COUNT(*) as total FROM blogs');
+    const totalViewsResult = await client.query('SELECT COALESCE(SUM(views), 0) as total FROM blogs');
+    client.release();
+    
+    res.json({
+      totalPosts: parseInt(totalPostsResult.rows[0].total),
+      totalViews: parseInt(totalViewsResult.rows[0].total),
+    });
+  } catch (error) {
+    console.error('Error fetching analytics:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics', details: error.message });
+  }
 });
 
 // Newsletter Schema
@@ -512,17 +368,16 @@ app.post('/api/contact-submissions', async (req, res) => {
       });
     }
 
-    const submission = new ContactSubmission({ 
-      name: name.trim(), 
-      email: email.trim().toLowerCase(), 
-      phone: phone ? phone.trim() : '', 
-      subject: subject.trim(), 
-      message: message.trim() 
-    });
+    const client = await pool.connect();
+    const result = await client.query(`
+      INSERT INTO contact_submissions (name, email, phone, subject, message)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [name.trim(), email.trim().toLowerCase(), phone ? phone.trim() : '', subject.trim(), message.trim()]);
+    client.release();
     
-    await submission.save();
-    console.log('Contact submission saved:', submission._id);
-    res.status(201).json(submission);
+    console.log('Contact submission saved:', result.rows[0].id);
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating contact submission:', error);
     res.status(500).json({ 
@@ -534,8 +389,10 @@ app.post('/api/contact-submissions', async (req, res) => {
 
 app.get('/api/contact-submissions', async (req, res) => {
   try {
-    const submissions = await ContactSubmission.find().sort({ createdAt: -1 });
-    res.json(submissions);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM contact_submissions ORDER BY created_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching contact submissions:', error);
     res.status(500).json({ 
@@ -548,13 +405,14 @@ app.get('/api/contact-submissions', async (req, res) => {
 app.put('/api/contact-submissions/:id/read', async (req, res) => {
   try {
     const { read } = req.body;
-    const submission = await ContactSubmission.findByIdAndUpdate(
-      req.params.id,
-      { read },
-      { new: true }
-    );
-    if (submission) {
-      res.json(submission);
+    const client = await pool.connect();
+    const result = await client.query(`
+      UPDATE contact_submissions SET read = $1 WHERE id = $2 RETURNING *
+    `, [read, req.params.id]);
+    client.release();
+    
+    if (result.rows.length > 0) {
+      res.json(result.rows[0]);
     } else {
       res.status(404).json({ error: 'Contact submission not found' });
     }
@@ -569,8 +427,11 @@ app.put('/api/contact-submissions/:id/read', async (req, res) => {
 
 app.delete('/api/contact-submissions/:id', async (req, res) => {
   try {
-    const submission = await ContactSubmission.findByIdAndDelete(req.params.id);
-    if (submission) {
+    const client = await pool.connect();
+    const result = await client.query('DELETE FROM contact_submissions WHERE id = $1 RETURNING *', [req.params.id]);
+    client.release();
+    
+    if (result.rows.length > 0) {
       console.log('Contact submission deleted:', req.params.id);
       res.json({ message: 'Contact submission deleted' });
     } else {
@@ -596,30 +457,42 @@ app.post('/api/newsletter/subscribe', async (req, res) => {
       });
     }
 
+    const client = await pool.connect();
+    
     // Check if already subscribed
-    const existingSubscriber = await NewsletterSubscriber.findOne({ email: email.toLowerCase() });
-    if (existingSubscriber) {
+    const existingResult = await client.query('SELECT * FROM newsletter_subscribers WHERE email = $1', [email.toLowerCase()]);
+    
+    if (existingResult.rows.length > 0) {
+      const existingSubscriber = existingResult.rows[0];
+      
       if (existingSubscriber.unsubscribed) {
         // Reactivate subscription
-        existingSubscriber.unsubscribed = false;
-        existingSubscriber.unsubscribedAt = null;
-        await existingSubscriber.save();
-        return res.json({ message: 'Subscription reactivated', subscriber: existingSubscriber });
+        const result = await client.query(`
+          UPDATE newsletter_subscribers 
+          SET unsubscribed = false, unsubscribed_at = NULL 
+          WHERE id = $1 
+          RETURNING *
+        `, [existingSubscriber.id]);
+        client.release();
+        
+        return res.json({ message: 'Subscription reactivated', subscriber: result.rows[0] });
       } else {
+        client.release();
         return res.status(400).json({ 
           error: 'Email already subscribed' 
         });
       }
     }
 
-    const subscriber = new NewsletterSubscriber({
-      email: email.toLowerCase(),
-      name: name || ''
-    });
+    const result = await client.query(`
+      INSERT INTO newsletter_subscribers (email, name)
+      VALUES ($1, $2)
+      RETURNING *
+    `, [email.toLowerCase(), name || '']);
+    client.release();
     
-    await subscriber.save();
-    console.log('Newsletter subscription added:', subscriber._id);
-    res.status(201).json({ message: 'Successfully subscribed', subscriber });
+    console.log('Newsletter subscription added:', result.rows[0].id);
+    res.status(201).json({ message: 'Successfully subscribed', subscriber: result.rows[0] });
   } catch (error) {
     console.error('Error subscribing to newsletter:', error);
     res.status(500).json({ 
@@ -631,8 +504,10 @@ app.post('/api/newsletter/subscribe', async (req, res) => {
 
 app.get('/api/newsletter/subscribers', async (req, res) => {
   try {
-    const subscribers = await NewsletterSubscriber.find().sort({ subscribedAt: -1 });
-    res.json(subscribers);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching newsletter subscribers:', error);
     res.status(500).json({ 
@@ -644,17 +519,18 @@ app.get('/api/newsletter/subscribers', async (req, res) => {
 
 app.put('/api/newsletter/subscribers/:id/unsubscribe', async (req, res) => {
   try {
-    const subscriber = await NewsletterSubscriber.findByIdAndUpdate(
-      req.params.id,
-      { 
-        unsubscribed: true, 
-        unsubscribedAt: new Date() 
-      },
-      { new: true }
-    );
-    if (subscriber) {
+    const client = await pool.connect();
+    const result = await client.query(`
+      UPDATE newsletter_subscribers 
+      SET unsubscribed = true, unsubscribed_at = $1 
+      WHERE id = $2 
+      RETURNING *
+    `, [new Date(), req.params.id]);
+    client.release();
+    
+    if (result.rows.length > 0) {
       console.log('Newsletter subscriber unsubscribed:', req.params.id);
-      res.json({ message: 'Successfully unsubscribed', subscriber });
+      res.json({ message: 'Successfully unsubscribed', subscriber: result.rows[0] });
     } else {
       res.status(404).json({ error: 'Subscriber not found' });
     }
@@ -669,8 +545,11 @@ app.put('/api/newsletter/subscribers/:id/unsubscribe', async (req, res) => {
 
 app.delete('/api/newsletter/subscribers/:id', async (req, res) => {
   try {
-    const subscriber = await NewsletterSubscriber.findByIdAndDelete(req.params.id);
-    if (subscriber) {
+    const client = await pool.connect();
+    const result = await client.query('DELETE FROM newsletter_subscribers WHERE id = $1 RETURNING *', [req.params.id]);
+    client.release();
+    
+    if (result.rows.length > 0) {
       console.log('Newsletter subscriber deleted:', req.params.id);
       res.json({ message: 'Subscriber deleted' });
     } else {
@@ -695,18 +574,23 @@ app.post('/api/newsletter/send', async (req, res) => {
       });
     }
 
+    const client = await pool.connect();
     let targetSubscribers = [];
     
     if (sendTo === 'all') {
-      targetSubscribers = await NewsletterSubscriber.find({ unsubscribed: false });
+      const result = await client.query('SELECT * FROM newsletter_subscribers WHERE unsubscribed = false');
+      targetSubscribers = result.rows;
     } else if (sendTo === 'selected' && subscriberIds && subscriberIds.length > 0) {
-      targetSubscribers = await NewsletterSubscriber.find({ 
-        _id: { $in: subscriberIds },
-        unsubscribed: false 
-      });
+      const result = await client.query(`
+        SELECT * FROM newsletter_subscribers 
+        WHERE id = ANY($1) AND unsubscribed = false
+      `, [subscriberIds]);
+      targetSubscribers = result.rows;
     } else if (sendTo === 'unsubscribed') {
-      targetSubscribers = await NewsletterSubscriber.find({ unsubscribed: true });
+      const result = await client.query('SELECT * FROM newsletter_subscribers WHERE unsubscribed = true');
+      targetSubscribers = result.rows;
     }
+    client.release();
 
     // Here you would integrate with your email service (SendGrid, Mailgun, etc.)
     // For now, we'll just log the newsletter details
@@ -783,19 +667,17 @@ app.post('/api/newsletter/upload', newsletterUpload.single('pdf'), async (req, r
     console.log('File filename:', req.file.filename);
     console.log('File original name:', req.file.originalname);
     
-    const newsletter = new NewsletterUpload({
-      name: name.trim(),
-      category: category.trim(),
-      date: new Date(date),
-      filename: req.file.filename,
-      originalName: req.file.originalname
-    });
+    const client = await pool.connect();
+    const result = await client.query(`
+      INSERT INTO newsletter_uploads (name, category, date, filename, original_name)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [name.trim(), category.trim(), new Date(date), req.file.filename, req.file.originalname]);
+    client.release();
     
-    console.log('Saving newsletter metadata to database...');
-    await newsletter.save();
-    console.log('Newsletter uploaded successfully:', newsletter._id);
+    console.log('Newsletter uploaded successfully:', result.rows[0].id);
     console.log('File stored locally, metadata stored in database');
-    res.status(201).json({ message: 'Newsletter uploaded successfully', newsletter });
+    res.status(201).json({ message: 'Newsletter uploaded successfully', newsletter: result.rows[0] });
   } catch (error) {
     console.error('Error uploading newsletter:', error);
     res.status(500).json({ 
@@ -807,8 +689,10 @@ app.post('/api/newsletter/upload', newsletterUpload.single('pdf'), async (req, r
 
 app.get('/api/newsletter/uploads', async (req, res) => {
   try {
-    const newsletters = await NewsletterUpload.find().sort({ uploadedAt: -1 });
-    res.json(newsletters);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM newsletter_uploads ORDER BY uploaded_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching uploaded newsletters:', error);
     res.status(500).json({ 
@@ -820,10 +704,15 @@ app.get('/api/newsletter/uploads', async (req, res) => {
 
 app.delete('/api/newsletter/uploads/:id', async (req, res) => {
   try {
-    const newsletter = await NewsletterUpload.findById(req.params.id);
-    if (!newsletter) {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM newsletter_uploads WHERE id = $1', [req.params.id]);
+    
+    if (result.rows.length === 0) {
+      client.release();
       return res.status(404).json({ error: 'Newsletter not found' });
     }
+    
+    const newsletter = result.rows[0];
     
     // Delete the file from uploads directory
     const filePath = path.join(__dirname, 'uploads', 'newsletters', newsletter.filename);
@@ -831,7 +720,9 @@ app.delete('/api/newsletter/uploads/:id', async (req, res) => {
       fs.unlinkSync(filePath);
     }
     
-    await NewsletterUpload.findByIdAndDelete(req.params.id);
+    await client.query('DELETE FROM newsletter_uploads WHERE id = $1', [req.params.id]);
+    client.release();
+    
     console.log('Newsletter deleted:', req.params.id);
     res.json({ message: 'Newsletter deleted successfully' });
   } catch (error) {
@@ -846,8 +737,10 @@ app.delete('/api/newsletter/uploads/:id', async (req, res) => {
 // Testimonials CRUD Endpoints
 app.get('/api/testimonials', async (req, res) => {
   try {
-    const testimonials = await Testimonial.find({ active: true }).sort({ createdAt: -1 });
-    res.json(testimonials);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM testimonials WHERE active = true ORDER BY created_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching testimonials:', error);
     res.status(500).json({ error: 'Failed to fetch testimonials', details: error.message });
@@ -856,8 +749,10 @@ app.get('/api/testimonials', async (req, res) => {
 
 app.get('/api/testimonials/all', async (req, res) => {
   try {
-    const testimonials = await Testimonial.find().sort({ createdAt: -1 });
-    res.json(testimonials);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM testimonials ORDER BY created_at DESC');
+    client.release();
+    res.json(result.rows);
   } catch (error) {
     console.error('Error fetching all testimonials:', error);
     res.status(500).json({ error: 'Failed to fetch testimonials', details: error.message });
@@ -878,16 +773,16 @@ app.post('/api/testimonials', async (req, res) => {
       return res.status(400).json({ error: 'Rating must be between 1 and 5' });
     }
     
-    const newTestimonial = new Testimonial({
-      name: name.trim(),
-      company: company.trim(),
-      rating: parseInt(rating),
-      testimonial: testimonial ? testimonial.trim() : ''
-    });
+    const client = await pool.connect();
+    const result = await client.query(`
+      INSERT INTO testimonials (name, company, rating, testimonial)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [name.trim(), company.trim(), parseInt(rating), testimonial ? testimonial.trim() : '']);
+    client.release();
     
-    await newTestimonial.save();
-    console.log('Testimonial created:', newTestimonial._id);
-    res.status(201).json({ message: 'Testimonial created successfully', testimonial: newTestimonial });
+    console.log('Testimonial created:', result.rows[0].id);
+    res.status(201).json({ message: 'Testimonial created successfully', testimonial: result.rows[0] });
   } catch (error) {
     console.error('Error creating testimonial:', error);
     res.status(500).json({ error: 'Failed to create testimonial', details: error.message });
@@ -908,24 +803,21 @@ app.put('/api/testimonials/:id', async (req, res) => {
       return res.status(400).json({ error: 'Rating must be between 1 and 5' });
     }
     
-    const updatedTestimonial = await Testimonial.findByIdAndUpdate(
-      req.params.id,
-      {
-        name: name.trim(),
-        company: company.trim(),
-        rating: parseInt(rating),
-        testimonial: testimonial ? testimonial.trim() : '',
-        active: active !== undefined ? active : true
-      },
-      { new: true }
-    );
+    const client = await pool.connect();
+    const result = await client.query(`
+      UPDATE testimonials 
+      SET name = $1, company = $2, rating = $3, testimonial = $4, active = $5
+      WHERE id = $6 
+      RETURNING *
+    `, [name.trim(), company.trim(), parseInt(rating), testimonial ? testimonial.trim() : '', active !== undefined ? active : true, req.params.id]);
+    client.release();
     
-    if (!updatedTestimonial) {
-      return res.status(404).json({ error: 'Testimonial not found' });
+    if (result.rows.length > 0) {
+      console.log('Testimonial updated:', req.params.id);
+      res.json({ message: 'Testimonial updated successfully', testimonial: result.rows[0] });
+    } else {
+      res.status(404).json({ error: 'Testimonial not found' });
     }
-    
-    console.log('Testimonial updated:', req.params.id);
-    res.json({ message: 'Testimonial updated successfully', testimonial: updatedTestimonial });
   } catch (error) {
     console.error('Error updating testimonial:', error);
     res.status(500).json({ error: 'Failed to update testimonial', details: error.message });
@@ -934,13 +826,16 @@ app.put('/api/testimonials/:id', async (req, res) => {
 
 app.delete('/api/testimonials/:id', async (req, res) => {
   try {
-    const testimonial = await Testimonial.findByIdAndDelete(req.params.id);
-    if (!testimonial) {
-      return res.status(404).json({ error: 'Testimonial not found' });
-    }
+    const client = await pool.connect();
+    const result = await client.query('DELETE FROM testimonials WHERE id = $1 RETURNING *', [req.params.id]);
+    client.release();
     
-    console.log('Testimonial deleted:', req.params.id);
-    res.json({ message: 'Testimonial deleted successfully' });
+    if (result.rows.length > 0) {
+      console.log('Testimonial deleted:', req.params.id);
+      res.json({ message: 'Testimonial deleted successfully' });
+    } else {
+      res.status(404).json({ error: 'Testimonial not found' });
+    }
   } catch (error) {
     console.error('Error deleting testimonial:', error);
     res.status(500).json({ error: 'Failed to delete testimonial', details: error.message });
@@ -974,6 +869,7 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`MongoDB URI: ${mongoURI ? mongoURI.substring(0, 50) + '...' : 'Not configured'}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 PostgreSQL database connected`);
+  console.log(`🌐 Environment: ${process.env.NODE_ENV || 'development'}`);
 }); 

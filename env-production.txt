@@ -1,11 +1,7 @@
 # Production Environment Variables for Render Deployment
 
-# MongoDB Atlas Connection String (Required)
-# Replace with your actual MongoDB Atlas connection string
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database?retryWrites=true&w=majority&ssl=true&sslValidate=true
-
-# Alternative MongoDB URI (if needed)
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/database?retryWrites=true&w=majority&ssl=true&sslValidate=true
+# PostgreSQL Database (Auto-configured by Render)
+# DATABASE_URL will be automatically set by Render
 
 # Port (Render will set this automatically)
 PORT=10000
@@ -13,13 +9,9 @@ PORT=10000
 # Node Environment
 NODE_ENV=production
 
-# SSL/TLS Configuration
-NODE_TLS_REJECT_UNAUTHORIZED=1
-
-# MongoDB Connection Options
-MONGODB_SSL=true
-MONGODB_TLS=false
-
-# Force specific SSL behavior (use these if SSL issues persist)
-# MONGODB_SSL=false
-# MONGODB_TLS=true
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=mmc_db
+DB_USER=mmc_user
+DB_PASSWORD=your_password_here
