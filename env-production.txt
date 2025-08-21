@@ -1,0 +1,6 @@
+# Production Environment Variables
+NODE_ENV=production
+PORT=10000
+
+# MongoDB Atlas Connection String (keep your existing one)
+MONGO_URI=mongodb+srv://ashayjinturkar2:IvkQd5ZfCHzQPYo2@mmc.hkirdlo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
