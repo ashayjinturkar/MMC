@@ -101,46 +101,6 @@ app.get('/api/db-health', async (req, res) => {
   }
 });
 
-// Blog Schema
-const blogSchema = new mongoose.Schema({
-  title: String,
-  excerpt: String,
-  image: String,
-  thumbnail: String,
-  date: String,
-  author: String,
-  category: String,
-  tags: [String],
-  content: String, // HTML/Markdown
-  featured: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
-  views: { type: Number, default: 0 },
-});
-const Blog = mongoose.model('Blog', blogSchema);
-
-// Contact Submission Schema
-const contactSchema = new mongoose.Schema({
-  name: String,
-  email: String,
-  phone: String,
-  subject: String,
-  message: String,
-  read: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
-});
-const ContactSubmission = mongoose.model('ContactSubmission', contactSchema);
-
-// Testimonial Schema
-const testimonialSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  company: { type: String, required: true },
-  rating: { type: Number, required: true, min: 1, max: 5 },
-  testimonial: { type: String, default: '' },
-  active: { type: Boolean, default: true },
-  createdAt: { type: Date, default: Date.now },
-});
-const Testimonial = mongoose.model('Testimonial', testimonialSchema);
-
 // Blog CRUD Endpoints
 app.get('/api/blogs', async (req, res) => {
   try {
@@ -326,25 +286,6 @@ app.get('/api/blogs-analytics', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch analytics', details: error.message });
   }
 });
-
-// Newsletter Schema
-const NewsletterSubscriber = mongoose.model('NewsletterSubscriber', new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  name: { type: String },
-  subscribedAt: { type: Date, default: Date.now },
-  unsubscribed: { type: Boolean, default: false },
-  unsubscribedAt: { type: Date }
-}));
-
-// Newsletter Upload Schema
-const NewsletterUpload = mongoose.model('NewsletterUpload', new mongoose.Schema({
-  name: { type: String, required: true },
-  category: { type: String, required: true },
-  date: { type: Date, required: true },
-  filename: { type: String, required: true },
-  originalName: { type: String, required: true },
-  uploadedAt: { type: Date, default: Date.now }
-}));
 
 // Contact Submissions Endpoints
 app.post('/api/contact-submissions', async (req, res) => {
