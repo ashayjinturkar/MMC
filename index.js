@@ -112,6 +112,18 @@ if (!mongoURI) {
   console.log('Database features will be limited until connection is established');
 }
 
+// SSL/TLS configuration from environment variables
+const forceSSL = process.env.MONGODB_SSL !== 'false';
+const validateSSL = process.env.MONGODB_SSL_VALIDATE !== 'false';
+const useTLS = process.env.MONGODB_TLS === 'true';
+
+console.log('MongoDB SSL Configuration:', {
+  forceSSL,
+  validateSSL,
+  useTLS,
+  hasURI: !!mongoURI
+});
+
 // Connect to MongoDB with retry logic and better SSL handling
 const connectDB = async () => {
   try {
@@ -119,23 +131,100 @@ const connectDB = async () => {
       throw new Error('MongoDB URI not configured');
     }
     
-    const options = {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      ssl: true,
-      sslValidate: true,
-      retryWrites: true,
-      w: 'majority',
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-      family: 4, // Force IPv4
-      maxPoolSize: 10,
-      minPoolSize: 1,
-      maxIdleTimeMS: 30000,
-    };
+    // Try multiple connection strategies
+    const connectionStrategies = [
+      // Strategy 1: Standard SSL with validation
+      {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        ssl: true,
+        sslValidate: true,
+        retryWrites: true,
+        w: 'majority',
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        family: 4,
+        maxPoolSize: 10,
+        minPoolSize: 1,
+        maxIdleTimeMS: 30000,
+      },
+      // Strategy 2: TLS with validation
+      {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        tls: true,
+        tlsAllowInvalidCertificates: false,
+        retryWrites: true,
+        w: 'majority',
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        family: 4,
+        maxPoolSize: 10,
+        minPoolSize: 1,
+        maxIdleTimeMS: 30000,
+      },
+      // Strategy 3: Minimal SSL (fallback)
+      {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        ssl: true,
+        sslValidate: false,
+        retryWrites: true,
+        w: 'majority',
+        serverSelectionTimeoutMS: 15000,
+        socketTimeoutMS: 60000,
+        family: 4,
+        maxPoolSize: 5,
+        minPoolSize: 1,
+        maxIdleTimeMS: 30000,
+      },
+      // Strategy 4: No SSL (emergency fallback)
+      {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+        ssl: false,
+        retryWrites: true,
+        w: 'majority',
+        serverSelectionTimeoutMS: 20000,
+        socketTimeoutMS: 60000,
+        family: 4,
+        maxPoolSize: 3,
+        minPoolSize: 1,
+        maxIdleTimeMS: 30000,
+      }
+    ];
 
-    await mongoose.connect(mongoURI, options);
-    console.log('Connected to MongoDB successfully');
+    let connected = false;
+    let lastError = null;
+
+    for (let i = 0; i < connectionStrategies.length; i++) {
+      try {
+        console.log(`Trying MongoDB connection strategy ${i + 1}...`);
+        await mongoose.connect(mongoURI, connectionStrategies[i]);
+        console.log(`Connected to MongoDB successfully using strategy ${i + 1}`);
+        connected = true;
+        break;
+      } catch (strategyError) {
+        console.log(`Strategy ${i + 1} failed:`, strategyError.message);
+        lastError = strategyError;
+        
+        // If this is an SSL error, try the next strategy
+        if (strategyError.code === 'ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR' || 
+            strategyError.message.includes('SSL') ||
+            strategyError.message.includes('TLS')) {
+          console.log('SSL/TLS error detected, trying next strategy...');
+          continue;
+        }
+        
+        // For non-SSL errors, break and use the last error
+        break;
+      }
+    }
+
+    if (!connected) {
+      throw lastError || new Error('All connection strategies failed');
+    }
+
   } catch (error) {
     console.error('MongoDB connection error:', error);
     console.log('Server will continue running without database connection');
@@ -147,6 +236,7 @@ const connectDB = async () => {
       console.error('1. Network/firewall issues');
       console.error('2. MongoDB Atlas SSL certificate problems');
       console.error('3. TLS version incompatibility');
+      console.error('4. Render network restrictions');
     }
   }
 };
