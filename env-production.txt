@@ -18,10 +18,8 @@ NODE_TLS_REJECT_UNAUTHORIZED=1
 
 # MongoDB Connection Options
 MONGODB_SSL=true
-MONGODB_SSL_VALIDATE=true
 MONGODB_TLS=false
 
 # Force specific SSL behavior (use these if SSL issues persist)
 # MONGODB_SSL=false
-# MONGODB_SSL_VALIDATE=false
 # MONGODB_TLS=true

@@ -17,7 +17,6 @@ const testConnections = [
       useNewUrlParser: true,
       useUnifiedTopology: true,
       ssl: true,
-      sslValidate: true,
       retryWrites: true,
       w: 'majority'
     }
@@ -39,7 +38,6 @@ const testConnections = [
       useNewUrlParser: true,
       useUnifiedTopology: true,
       ssl: true,
-      sslValidate: false,
       retryWrites: true,
       w: 'majority'
     }
